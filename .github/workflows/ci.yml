@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [user-service, product-service, order-service]
+    defaults:
+      run:
+        working-directory: ${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: ${{ matrix.service }}/requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run migrations check
+        env:
+          DEBUG: 'True'
+          ALLOW_KEY_GENERATION: 'true'
+          ALLOWED_HOSTS: '*'
+          SKIP_PUBLIC_KEY_FETCH: 'true'
+          SECRET_KEY: ci-secret
+          FIELD_ENCRYPTION_KEY: 'kO4fX3G1jF5g2ZJf6QwQGxQjW5nJqK6uJQyYwY0V9xA='
+          SERVICE_SECRET: ci-service-secret
+        run: python manage.py makemigrations --check --dry-run
+      - name: Run tests
+        env:
+          DEBUG: 'True'
+          ALLOW_KEY_GENERATION: 'true'
+          ALLOWED_HOSTS: '*'
+          SKIP_PUBLIC_KEY_FETCH: 'true'
+          SECRET_KEY: ci-secret
+          FIELD_ENCRYPTION_KEY: 'kO4fX3G1jF5g2ZJf6QwQGxQjW5nJqK6uJQyYwY0V9xA='
+          SERVICE_SECRET: ci-service-secret
+        run: pytest -q
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm run build
+
+  security-and-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install scanners
+        run: pip install ruff pip-audit
+      - name: Lint Python
+        run: |
+          ruff check \
+            user-service/user_service/settings.py \
+            user-service/user_service/middleware.py \
+            user-service/user_service/request_id.py \
+            user-service/user_service/urls.py \
+            user-service/grpc_server.py \
+            user-service/users/auth_cookies.py \
+            user-service/users/views.py \
+            product-service/product_service/settings.py \
+            product-service/product_service/middleware.py \
+            product-service/product_service/request_id.py \
+            product-service/products/models.py \
+            product-service/grpc_server.py \
+            order-service/order_service/settings.py \
+            order-service/order_service/middleware.py \
+            order-service/order_service/request_id.py \
+            order-service/orders/grpc_clients.py \
+            order-service/orders/models.py \
+            order-service/orders/views.py \
+            --select E9,F --ignore E501 --output-format concise
+      - name: Audit dependencies
+        run: |
+          pip-audit -r user-service/requirements.txt
+          pip-audit -r product-service/requirements.txt
+          pip-audit -r order-service/requirements.txt
